@@ -1,0 +1,33 @@
+# dsh-qq-vision bundle patch：纯 host 插件（无 client 半），只注册工具。
+#
+# 这里挂的是**当前 DSH 会话**用的插件层（lib/index.js）。
+# QQ 会话用的是另一个入口：lib/mcp-server.js，由 profile 的 cordis.patch.yml
+# 里 mcp-qq-vision 那条 MCP 客户端行拉起，两者共用 lib/vision.js。
+#
+# id 与包名分开：id 是 loader 里的稳定身份（改名会让已装用户的设置丢），
+# name 必须是 npm 包名 —— cordis 按 name 去 import 包，写错就是 Cannot find package。
+# 纯 insert(id/name) 可热挂载，不需要重启 DSH。
+- insert:
+    - id: qq-vision
+      name: dsh-qq-vision
+      config:
+        # 桥接控制台地址。留空 = http://127.0.0.1:3200
+        bridgeBaseUrl: ""
+        # 桥接根目录。留空时按 bridgeBaseUrl / 环境变量 / 常见安装路径依次探测。
+        bridgeRoot: ""
+        # 视觉后端（OpenAI 兼容）。留空 = 百炼 https://dashscope.aliyuncs.com/compatible-mode/v1
+        visionBaseUrl: ""
+        # 视觉开关。false = 只用免费本地 OCR（默认，零花费）；true = 调付费视觉模型
+        visionEnabled: false
+        # 视觉模型。留空 = qwen3.5-omni-flash（实测比 qwen3.7-plus 省 7 成输出 token、快 1.8 倍）
+        visionModel: ""
+        # 从哪个环境变量 / 凭据名取 key。留空 = BAILIAN_API_KEY
+        # （环境变量没有时会去 ~/.dsh/.credentials.yaml 的 refs 段找同名项）
+        visionApiKeyEnv: ""
+        # 单价表，单位「元 / 百万 token」。空 = 只记 token 不计金额
+        # 形状：{"模型名": {"in": 0.3, "out": 1.2}}
+        prices: {}
+        # 单图字节上限，默认 8388608
+        maxImageBytes: 8388608
+        # 视觉请求超时（毫秒），默认 90000
+        timeoutMs: 90000

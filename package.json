@@ -1,0 +1,32 @@
+{
+  "name": "dsh-qq-vision",
+  "version": "0.1.0",
+  "private": true,
+  "description": "让 QQ 桥接的纯文本模型也能看图片：取图 → 视觉模型/本地 OCR → 文字结果回灌上下文",
+  "type": "module",
+  "main": "./lib/index.js",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "locale",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "test": "node test/smoke.mjs && node test/deep.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "vision",
+    "ocr",
+    "qq"
+  ]
+}

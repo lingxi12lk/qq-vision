@@ -1,0 +1,23 @@
+# 依赖
+node_modules/
+pnpm-lock.yaml
+package-lock.json
+
+# 本机运行时覆盖（含本机绝对路径与令牌，不入库；模板见 runtime.example.json）
+/runtime.json
+
+# 本机账单与改前备份（属于使用数据，不入库）
+/usage.jsonl
+/usage-backup/
+*.bak
+*.bak-*
+
+# 临时产物与日志
+tmp/
+*.log
+
+# 编辑器与系统
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

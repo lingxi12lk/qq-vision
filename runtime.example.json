@@ -1,0 +1,12 @@
+﻿{
+  "bridgeBaseUrl": "http://127.0.0.1:3200",
+  "bridgeRoot": "E:\\dsh-qq\\qq-bridge-v2",
+  "visionEnabled": false,
+  "visionBaseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "visionModel": "qwen3.5-omni-flash",
+  "visionApiKeyEnv": "BAILIAN_API_KEY",
+  "prompt": "",
+  "timeoutMs": 90000,
+  "maxImageBytes": 8388608,
+  "prices": {}
+}
