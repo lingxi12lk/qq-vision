@@ -13,14 +13,16 @@
   "files": [
     "lib",
     "cordis.patch.yml",
-    "locale",
+    "runtime.example.json",
     "README.md"
   ],
   "engines": {
     "node": ">=22.19"
   },
   "scripts": {
-    "test": "node test/smoke.mjs && node test/deep.mjs"
+    "test": "node test/smoke.mjs && node test/verify-lossless.mjs && node test/verify-custom.mjs && node test/verify-mcp-tools.mjs",
+    "test:paid": "node test/verify-model-pick.mjs",
+    "test:live": "node test/deep.mjs"
   },
   "keywords": [
     "dsh",

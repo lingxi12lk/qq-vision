@@ -136,7 +136,10 @@ qq_vision_config({ action: 'set', priceIn: 0.3, priceOut: 1.2 })
 | `qwen3.5-omni-flash` | 152 | 57 | 209 | 1172ms | 默认，描述完整 |
 | `qwen3-vl-plus` | 168 | 119 | 287 | 3575ms | 描述最细，最慢最贵 |
 | `qwen-vl-ocr` | 146 | 18 | 164 | 376ms | 只出文字，最快 |
-| `qwen3.7-plus` | 94 | 91 | 185 | 2073ms | 已停用：不在大学生券范围，输出啰嗦 |
+
+> `qwen3.7-plus` 曾测过（94 / 91 / 185 tok / 2073ms），但不在百炼大学生优惠券覆盖范围、按字真扣钱，
+> 且输出比 omni-flash 啰嗦 7 成，已按用户要求从模型菜单移除。`MODEL_CATALOG` 里不再列出，
+> 传它的名字仍能发出去（菜单不是白名单），但工具描述和 `qq_vision_models` 都不会推荐它。
 
 ## 配置优先级
 
@@ -237,6 +240,7 @@ node test\deep.mjs             # 真连桥接、真识图、真走 MCP（22 项 
 node test\verify-billing.mjs   # 断言不花钱的两条路径都不产生付费调用
 node test\verify-model-pick.mjs # 三模型对照，打印 token/耗时（会花钱）
 node test\verify-custom.mjs    # 21 项：models / config get-set-备份 / usage 记账清空
+node test\verify-lossless.mjs  # 24 项：工具返回值必须能无损 JSON 往返
 node test\verify-mcp-tools.mjs # MCP 七个工具都注册上了
 node test\verify-mcp-calls.mjs # MCP 真调 models/usage/config 三个新工具
 ```
@@ -244,10 +248,16 @@ node test\verify-mcp-calls.mjs # MCP 真调 models/usage/config 三个新工具
 `deep.mjs` 需要桥接在线（默认 `127.0.0.1:3200`）。桥接会自动重启，偶发连不上时重跑即可。
 `verify-model-pick.mjs` 与 `deep.mjs` 的部分用例会真调付费模型并记账，跑之前确认 `visionEnabled` 的状态符合预期。
 
+`verify-lossless.mjs` 值得单独说一句：DSH 对插件工具的返回值做 JSON 往返校验，
+返回值里只要出现 `undefined`（对象属性或数组元素都算），整次调用就报
+`tool "xxx" returned invalid output: value is not lossless JSON` 并把结果丢掉。
+本插件用两道防线挡住它 —— 每个工具自己把字段补成 `null`，`apply()` 里再统一套一层
+`sanitize()`。加新工具时照这个写，否则模型只会看到一句「工具调用失败」。
+
 ## 已知边界
 
 - **只认 Windows OCR**：`ocrWithWindows` 在非 win32 平台直接抛错，视觉后端那条路不受影响。
 - **视觉后端只实现 OpenAI 兼容的 `/chat/completions`**：换别的协议要改 `describeWithVision`。
-- **模型菜单是硬编码的四个**：`MODEL_CATALOG` 里只有本机实测过的四个。传别的模型名照样能发出去（不当白名单用），但 `qq_vision_models` 不会列出来。
+- **模型菜单是硬编码的三个**：`MODEL_CATALOG` 里只有本机实测过的三个。传别的模型名照样能发出去（不当白名单用），但 `qq_vision_models` 不会列出来。
 - **单价要自己填**：百炼价格随时调，插件不猜。不填只记 token，不折算金额。
 - **一次最多看 5 张**（`limit` 上限），再多就分批。

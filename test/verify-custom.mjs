@@ -22,11 +22,12 @@ const rtRef = () => resolveRuntime({});
   const r = await tool.execute({});
   const models = r.data?.models ?? [];
   const ids = models.map((m) => m.id);
-  check('qq_vision_models 返回模型菜单', models.length >= 4, `${models.length} 个：${ids.join(', ')}`);
+  check('qq_vision_models 返回模型菜单', models.length >= 3, `${models.length} 个：${ids.join(', ')}`);
   check('菜单含实测数据', models.every((m) => m.measured && typeof m.measured.total === 'number'), '');
   check('标记了当前默认模型', models.filter((m) => m.current).length === 1,
     `current = ${models.find((m) => m.current)?.id ?? '无'}`);
-  check('qwen3.7-plus 标注为不推荐', /不推荐/.test(models.find((m) => m.id === 'qwen3.7-plus')?.label ?? ''), '');
+  // 用户 2026-10-31 明确要求：qwen3.7-plus 不在大学生券范围，必须从菜单里拿掉。
+  check('qwen3.7-plus 已从菜单移除', !ids.includes('qwen3.7-plus'), `菜单 = ${ids.join(', ')}`);
 }
 
 // ── 2. qq_vision_config get ──
