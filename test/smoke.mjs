@@ -81,8 +81,8 @@ const plugin = await import('../lib/index.js');
 check('index.js 导出 name = dsh-qq-vision', () => {
   assert.equal(plugin.name, 'dsh-qq-vision');
 });
-check('index.js 导出 inject 只含 tools', () => {
-  assert.deepEqual(plugin.inject, ['tools']);
+check('index.js 导出 inject 含 tools 与 webServer', () => {
+  assert.deepEqual(plugin.inject, ['tools', 'webServer']);
 });
 check('index.js 导出 apply 函数', () => {
   assert.equal(typeof plugin.apply, 'function');

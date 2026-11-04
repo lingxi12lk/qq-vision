@@ -31,7 +31,8 @@ if (info.inputModalities === void 0 || !info.inputModalities.includes("image")) 
 lib/vision.js      核心能力（零第三方依赖，只用 node: 内置模块 + 本仓库文件）
 lib/ocr.ps1        Windows WinRT OCR 包装（离线兜底，只出文字）
 lib/mcp-server.js  MCP server —— 给 QQ 会话用（走 mcp__qq-vision__ 命名空间）
-lib/index.js       DSH 插件 —— 给当前 DSH 会话用（注册 7 个工具）
+lib/index.js       DSH 插件 host 半边 —— 7 个工具 + 一条 /dsh-qq-vision-api 路由
+client.js          DSH 插件 client 半边 —— 设置页「QQ 识图」面板 + 插件页配置
 ```
 
 为什么拆成 MCP + 插件两份：QQ 会话（`qq-chat-v2` preset）不挂载任意 DSH 插件，
@@ -94,6 +95,32 @@ lib/index.js       DSH 插件 —— 给当前 DSH 会话用（注册 7 个工�
 qq_vision_selftest({})              // 默认 paid=false：只查配置，零花费
 qq_vision_selftest({ paid: true })  // 真调一次视觉模型（会记账），验证付费路径
 ```
+
+## 设置页面板
+
+跟 `qq-voice` 一个形状，除了工具，还有可视化面板，不用背参数：
+
+- **设置 → QQ 识图**（`settings.section`，order 37，排在「QQ 语音」35 后面）
+- **插件列表 → dsh-qq-vision**（`plugins.bundle.config`，key = 包名）
+
+面板里七张卡：
+
+| 卡 | 能做什么 |
+| --- | --- |
+| 识图链路 | 一眼看桥接在不在、OCR 脚本在不在、视觉开关状态 |
+| 视觉模型 | 三个模型带本机实测 token/耗时，点一下切换，当前用的高亮 |
+| 后端与凭据 | 改后端地址、key 来源、超时、单图上限；key 默认打码，点「显示」才明文 |
+| 识图测试 | 贴本地图片路径直接跑一次（`preferOcr` 勾上 = 零花费） |
+| 五层自检 | 一次跑完五层，逐层给绿/红与耗时；付费层要单独勾「允许花钱」 |
+| 账单 | 最近 N 条流水：时间、模型、prompt/completion token、金额 |
+| 单价 | 按模型配「元/百万 token」，配了账单才会折成金额 |
+
+面板数据全走 host 侧一条同源路由 `GET/POST /dsh-qq-vision-api`：
+
+- **只认 loopback Host**（`127.0.0.1`、`localhost`、`[::1]`、`0.0.0.0`、IPv4 字面量、方括号 IPv6），
+  域名 Host 一律 403 —— 挡 DNS rebinding。
+- POST 只转发 `WEB_TOOL_ALLOW` 白名单里的 7 个工具，别的一律 403。
+- 改配置同样写 `runtime.json`，**改完立即生效，不用重启**；只有改 `client.js` 本身才需要重启 DSH。
 
 ## 完全自定义
 
@@ -236,6 +263,7 @@ MCP server 需要 `@modelcontextprotocol/sdk` 与 `zod`（DSH 自带的 profile 
 ```powershell
 cd <本仓库路径>
 node test\smoke.mjs            # 不联网不碰桥接（37 项）
+node test\web-route.mjs        # 46 项：Web 路由注册、Host 判定、白名单、handler 端到端
 node test\deep.mjs             # 真连桥接、真识图、真走 MCP（22 项 + 1 跳过）
 node test\verify-billing.mjs   # 断言不花钱的两条路径都不产生付费调用
 node test\verify-model-pick.mjs # 三模型对照，打印 token/耗时（会花钱）
@@ -261,3 +289,7 @@ node test\verify-mcp-calls.mjs # MCP 真调 models/usage/config 三个新工具
 - **模型菜单是硬编码的三个**：`MODEL_CATALOG` 里只有本机实测过的三个。传别的模型名照样能发出去（不当白名单用），但 `qq_vision_models` 不会列出来。
 - **单价要自己填**：百炼价格随时调，插件不猜。不填只记 token，不折算金额。
 - **一次最多看 5 张**（`limit` 上限），再多就分批。
+- **面板只在本机 Web GUI 里出现**：`client.js` 是 web 平台半边，`immediately: true` 一启动就加载，
+  但改它本身必须重启 DSH；改 `runtime.json`（面板里点就是改它）不用重启。
+- **`/dsh-qq-vision-api` 不做出网鉴权**：只靠 Host 判定挡 DNS rebinding。要在别的机器上开面板，
+  得自己加一层反代鉴权。

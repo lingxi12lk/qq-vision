@@ -1,17 +1,37 @@
 {
   "name": "dsh-qq-vision",
-  "version": "0.1.0",
-  "private": true,
-  "description": "让 QQ 桥接的纯文本模型也能看图片：取图 → 视觉模型/本地 OCR → 文字结果回灌上下文",
+  "version": "1.1.0",
+  "description": "DeepSeek Harness 插件：让纯文本模型也能看图片——取图 → 视觉模型/本地 OCR → 文字结果回灌上下文，并在设置页提供可视化面板。",
   "type": "module",
   "main": "./lib/index.js",
+  "icon": "icon.svg",
+  "license": "MIT",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
     }
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
   },
   "files": [
     "lib",
+    "client.js",
+    "locale",
+    "icon.svg",
     "cordis.patch.yml",
     "runtime.example.json",
     "README.md"
