@@ -4,7 +4,7 @@
 //   3) toolModels 在真 ctx（假 llm）下真的走扫描、带 source / backend / current / usable
 //   4) toolModels 在没有 llm 的 ctx 下自动降级到兜底表，不抛错
 // 用法：node test/verify-scan.mjs
-import { scanDshModels, builtinRows, mergeRows, backendOfRoute } from '../lib/model-scan.js';
+import { scanDshModels, builtinRows, mergeRows, backendOfRoute, readPiAiProfiles } from '../lib/model-scan.js';
 import { __internals } from '../lib/index.js';
 import { resolveRuntime } from '../lib/vision.js';
 
@@ -194,6 +194,52 @@ const fakeLlm = {
   const s = String(out.summary ?? '');
   check('summary 提到「扫描 DSH」', s.includes('扫描 DSH'), s.slice(0, 60));
   check('summary 提到 provider 报错数', s.includes('provider 报错'), s.slice(-60));
+}
+
+// ── 8. settings 里用户自配的 baseURL / apiKeyEnv 能补到 provider 行 ──
+// 背景：llm.listConfigurableProviders() 只对 pi-ai 内置目录里的 provider 带
+// defaultBaseURL / baseURLEnv；用户自己在 cordis.patch.yml 加的走 declared 分支，
+// 那些字段根本不存在 —— 实测 12 条路由全空。真实值在 settings 的 providers 段。
+{
+  const fakeSettings = {
+    describe: () => [
+      {
+        ns: 'llm-pi-ai',
+        value: {
+          providers: {
+            bailian: { apiKeyEnv: 'BAILIAN_API_KEY', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+            'baomiao-oneapi': { apiKeyEnv: 'BAOMIAO_API_KEY', baseURL: 'https://open-ai.baomiao.cn/v1' }
+          }
+        }
+      },
+      { ns: 'agent-default-model', value: { provider: 'workbuddy-global', model: 'x' } }
+    ]
+  };
+
+  const profiles = readPiAiProfiles(fakeSettings);
+  check('readPiAiProfiles 读到 2 条路由', profiles.size === 2, [...profiles.keys()].join(','));
+  check('读到 bailian 的 baseURL', profiles.get('bailian')?.baseUrl === 'https://dashscope.aliyuncs.com/compatible-mode/v1');
+  check('读到 baomiao 的 apiKeyEnv', profiles.get('baomiao-oneapi')?.apiKeyEnv === 'BAOMIAO_API_KEY');
+  check('不把非 llm 的 ns 收进来', !profiles.has('x'));
+
+  // settings 里没写的路由，仍保留 listConfigurableProviders 给的值
+  const withMeta = await scanDshModels(fakeLlm, { profiles });
+  const bailianRow = withMeta.providers.find((p) => p.route === 'bailian');
+  check('provider 行带上 settings 里的 baseUrl', bailianRow?.baseUrl === 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    bailianRow?.baseUrl);
+  check('provider 行带上 settings 里的 apiKeyEnv', bailianRow?.apiKeyEnv === 'BAILIAN_API_KEY');
+  const wbRow = withMeta.providers.find((p) => p.route === 'workbuddy');
+  check('settings 里没有的路由不受影响', wbRow?.baseUrl === '' && wbRow?.apiKeyEnv === '');
+
+  // 模型行也要带上
+  const bailianModel = withMeta.models.find((m) => m.provider === 'bailian');
+  check('模型行带上 baseUrl', bailianModel?.baseUrl === 'https://dashscope.aliyuncs.com/compatible-mode/v1');
+
+  // describe 抛错不连坐
+  const badSettings = { describe: () => { throw new Error('settings 挂了'); } };
+  check('describe 抛错时返回空 Map', readPiAiProfiles(badSettings).size === 0);
+  check('没有 settings 时返回空 Map', readPiAiProfiles(undefined).size === 0);
+  check('settings 没有 describe 时返回空 Map', readPiAiProfiles({}).size === 0);
 }
 
 const passed = results.filter((r) => r.ok).length;
