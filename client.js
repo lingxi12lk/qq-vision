@@ -198,6 +198,14 @@ window.__ModuleLoader__.load({
       const currentModel = cfg.visionModel || vision.model || '';
       const priceOf = (id) => cfg.prices?.[id] || null;
 
+      // 后端：workbuddy 用 vault 里的 token，百炼用 key —— 界面上要分开说，
+      // 否则用户会盯着"key 为空"以为坏了。
+      const provider = cfg.visionProvider || vision.provider || 'workbuddy';
+      const isWb = provider === 'workbuddy';
+      const providerLabel = isWb ? 'WorkBuddy' : '百炼';
+      const wb = vision.workbuddy || cfg.workbuddy || null;
+      const wbUsable = models.filter((m) => (m.provider || 'bailian') === provider);
+
       return h('div', { className: 'qqz-panel' },
 
         h(Banner, { text: error, tone: 'error' }),
@@ -211,7 +219,7 @@ window.__ModuleLoader__.load({
               h(Badge, { tone: bridge.connected ? 'ok' : 'error' },
                 bridge.connected ? '桥接在线' : '桥接离线'),
               h(Badge, { tone: visionOn ? 'ok' : undefined },
-                visionOn ? '视觉开启（计费）' : '只走免费 OCR'),
+                visionOn ? `视觉开启（${providerLabel}，计费）` : '只走免费 OCR'),
               h(Badge, { tone: ocr.exists ? (ocr.bom ? 'ok' : 'error') : 'error' },
                 ocr.exists ? (ocr.bom ? 'OCR 就绪' : 'OCR BOM 缺失') : 'OCR 缺失'),
               h('button', { type: 'button', onClick: () => { loadStatus(); loadConfig(); loadModels(); }, disabled: busyAny }, '刷新')
@@ -221,10 +229,14 @@ window.__ModuleLoader__.load({
             h(KV, { k: '桥接地址', v: bridge.baseUrl }),
             h(KV, { k: '桥接根目录', v: bridge.root }),
             h(KV, { k: '令牌来源', v: bridge.tokenSource }),
-            h(KV, { k: '视觉后端', v: vision.baseUrl }),
+            h(KV, { k: '视觉后端', v: `${providerLabel}${vision.baseUrl ? ' · ' + vision.baseUrl : ''}` }),
             h(KV, { k: '当前模型', v: currentModel }),
-            h(KV, { k: 'key 来源', v: vision.apiKeyVia || vision.apiKeyEnv }),
-            h(KV, { k: 'key', v: vision.apiKey }),
+            isWb
+              ? h(KV, { k: '凭据', v: wb?.ok
+                ? `vault ${wb.region || '?'} 区 · ${wb.nickname || wb.uid || ''} · ${wb.expired ? '已过期' : wb.nearExpiry ? '快过期' : '有效'}`
+                : `vault 不可用（${wb?.error || '未读取'}）` })
+              : h(KV, { k: 'key 来源', v: vision.apiKeyVia || vision.apiKeyEnv }),
+            isWb ? null : h(KV, { k: 'key', v: vision.apiKey }),
             h(KV, { k: '计费', v: vision.billing }),
             h(KV, { k: 'OCR 脚本', v: ocr.script })
           ),
@@ -247,15 +259,25 @@ window.__ModuleLoader__.load({
                 onChange: (v) => saveConfig({ visionEnabled: v }, '视觉总开关')
               })
             ),
+            h(Field, { label: '视觉后端', hint: 'workbuddy=腾讯网关（按 credit，促销期几乎免费）；bailian=阿里百炼' },
+              h('select', {
+                value: provider,
+                disabled: busyAny,
+                onChange: (e) => saveConfig({ visionProvider: e.target.value }, '视觉后端')
+              },
+                h('option', { value: 'workbuddy' }, 'WorkBuddy（deepseek-v4.1-flash）'),
+                h('option', { value: 'bailian' }, '百炼 DashScope（qwen 系列）')
+              )
+            ),
             h(Field, { label: '默认模型', hint: '改完立刻生效，不用重启' },
               h('select', {
                 value: currentModel,
                 disabled: busyAny,
                 onChange: (e) => saveConfig({ visionModel: e.target.value }, '默认模型')
               },
-                models.length === 0
+                wbUsable.length === 0
                   ? h('option', { value: currentModel }, currentModel || '（读不到模型表）')
-                  : models.map((m) => h('option', { key: m.id, value: m.id },
+                  : wbUsable.map((m) => h('option', { key: m.id, value: m.id },
                     `${m.id}${m.id === currentModel ? '（当前）' : ''} · ${m.label || ''}`))
               )
             )
@@ -263,11 +285,13 @@ window.__ModuleLoader__.load({
           models.length === 0 ? null : h('div', { className: 'qqz-models' },
             models.map((m) => {
               const on = m.id === currentModel;
+              const usable = (m.provider || 'bailian') === provider;
               const p = priceOf(m.id);
               const meas = m.measured || {};
               return h('div', { key: m.id, className: 'qqz-model' + (on ? ' on' : '') },
                 h('div', { className: 'qqz-model-main' },
-                  h('span', { className: 'qqz-model-id' }, m.id, on ? h(Badge, { tone: 'ok' }, '当前') : null),
+                  h('span', { className: 'qqz-model-id' }, m.id, on ? h(Badge, { tone: 'ok' }, '当前') : null,
+                    usable ? null : h(Badge, null, m.provider === 'workbuddy' ? 'WorkBuddy' : '百炼')),
                   h('span', { className: 'qqz-model-meta' },
                     [
                       m.label || null,
@@ -278,18 +302,22 @@ window.__ModuleLoader__.load({
                     [
                       meas.total ? `${meas.total} tok` : null,
                       meas.ms ? `${meas.ms}ms` : null,
-                      meas.prompt !== undefined ? `in ${meas.prompt} / out ${meas.completion}` : null
+                      meas.prompt !== undefined ? `in ${meas.prompt} / out ${meas.completion}` : null,
+                      meas.credit ? `${meas.credit} credit` : null
                     ].filter(Boolean).join(' · ') || '本机未实测'
                   ),
                   m.note ? h('span', { className: 'qqz-model-note' }, m.note) : null
                 ),
                 h('div', { className: 'qqz-model-act' },
                   h('span', { className: 'qqz-model-price' },
-                    p ? `¥${p.in ?? '?'}/M in · ¥${p.out ?? '?'}/M out` : '单价未配'),
+                    m.provider === 'workbuddy' ? '按 credit 计' : (p ? `¥${p.in ?? '?'}/M in · ¥${p.out ?? '?'}/M out` : '单价未配')),
                   on ? null : h('button', {
                     type: 'button', disabled: busyAny,
-                    onClick: () => saveConfig({ visionModel: m.id }, `默认模型（${m.id}）`)
-                  }, '设为默认')
+                    onClick: () => saveConfig(usable
+                      ? { visionModel: m.id }
+                      : { visionProvider: m.provider || 'bailian', visionModel: m.id },
+                    `默认模型（${m.id}）`)
+                  }, usable ? '设为默认' : '切到该后端')
                 )
               );
             })
@@ -299,7 +327,33 @@ window.__ModuleLoader__.load({
         // ── 后端与凭据 ──
         h('div', { className: 'qqz-card' },
           h('div', { className: 'qqz-card-head' }, h('strong', null, '后端与凭据')),
-          h(Row, null,
+          isWb
+            ? h(Row, null,
+                h(Field, { label: 'WorkBuddy 凭据库', hint: '默认 ~/.dsh/workbuddy-vault，下面有 cn/ 与 global/' },
+                  h('input', {
+                    type: 'text', defaultValue: cfg.visionVault || '',
+                    style: { minWidth: '300px' },
+                    placeholder: 'C:\\Users\\<你>\\.dsh\\workbuddy-vault',
+                    onBlur: (e) => {
+                      const v = e.target.value.trim();
+                      if (v !== (cfg.visionVault || '')) saveConfig({ visionVault: v }, '凭据库目录');
+                    }
+                  })
+                ),
+                h(Field, { label: '账号区', hint: '留空 = 自动挑刷新时间最新的那个' },
+                  h('select', {
+                    value: cfg.visionRegion || '',
+                    disabled: busyAny,
+                    onChange: (e) => saveConfig({ visionRegion: e.target.value }, '账号区')
+                  },
+                    h('option', { value: '' }, '自动'),
+                    h('option', { value: 'cn' }, 'cn（国内 copilot.tencent.com）'),
+                    h('option', { value: 'global' }, 'global（国际 workbuddy.ai）')
+                  )
+                )
+              )
+            : null,
+          isWb ? null : h(Row, null,
             h(Field, { label: '视觉后端根地址', hint: 'OpenAI 兼容，含 /v1' },
               h('input', {
                 type: 'text', defaultValue: cfg.visionBaseUrl || '',
@@ -324,7 +378,7 @@ window.__ModuleLoader__.load({
             )
           ),
           h(Row, null,
-            h(Field, { label: 'key 明文覆盖', hint: '一般不用填；填了会写进 runtime.json' },
+            isWb ? null : h(Field, { label: 'key 明文覆盖', hint: '一般不用填；填了会写进 runtime.json' },
               h('input', {
                 type: 'password', placeholder: '留空 = 按上面那个名字去找',
                 style: { minWidth: '260px' },

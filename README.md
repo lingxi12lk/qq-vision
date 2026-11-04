@@ -44,18 +44,22 @@ client.js          DSH 插件 client 半边 —— 设置页「QQ 识图」面�
 
 1. **取图**：`GET /api/images/message?key=...&messageId=...`，带 `x-console-token` + `x-agent-token` + `x-agent-call: 1`
 2. **看图**（两条路，视觉优先、OCR 兜底）：
-   - 视觉模型：默认 `qwen3.5-omni-flash`（`visionEnabled=false` 时整条路跳过），`POST {visionBaseUrl}/chat/completions`，图片走 `data:<mime>;base64,...`
+   - 视觉模型：两种后端任选
+     - **WorkBuddy**（默认）：`POST https://copilot.tencent.com/v2/chat/completions`，模型 `deepseek-v4.1-flash`，
+       强制 SSE 流式；token 从 `~/.dsh/workbuddy-vault/<区>/<uid>.json` 读，快过期自动刷新并回写 vault
+     - **百炼 DashScope**：`POST {visionBaseUrl}/chat/completions`，模型 `qwen3.5-omni-flash`，非流式
+     - 两条都用 `data:<mime>;base64,...` 传图（OpenAI 风格 `image_url` 内容块）
    - Windows OCR：`Windows.Media.Ocr`，离线，只出文字
    - 视觉成功之后**再补一刀 OCR** 存进 `ocrText`，图里的小字不容易漏
 3. **回灌**：结果拼成纯文字，形如
    ```
-   【图片1】（视觉模型 qwen3.5-omni-flash，209 tokens）
+   【图片1】（WorkBuddy 视觉模型 deepseek-v4.1-flash，245 tokens）
 
    1) 画面里有一只闭着眼睛、脸颊微红、举起一只爪子的卡通小猫，旁边有一个写着"好的"的对话气泡。
    2) 好的
    3) 这是一个聊天表情包，用于乖巧地表示同意、答应或确认。
 
-   【本次计费】调用付费视觉模型 1 次，合计 209 tokens（模型 qwen3.5-omni-flash）
+   【本次计费】调用付费视觉模型 1 次，合计 245 tokens，合计 0 credit（促销期免费）（模型 WorkBuddy deepseek-v4.1-flash）
    ```
 
 ## 工具
@@ -133,36 +137,60 @@ qq_vision_config({ action: 'get', revealKey: true })   // 才看明文
 
 // 改（只改传了的字段，其余不动；改前自动备份到 usage-backup/）
 qq_vision_config({ action: 'set', visionEnabled: true })
-qq_vision_config({ action: 'set', visionModel: 'qwen3-vl-plus' })
+qq_vision_config({ action: 'set', visionProvider: 'workbuddy' })
+qq_vision_config({ action: 'set', visionModel: 'deepseek-v4.1-flash' })
+qq_vision_config({ action: 'set', visionProvider: 'bailian', visionModel: 'qwen3-vl-plus' })
 qq_vision_config({ action: 'set', priceIn: 0.3, priceOut: 1.2 })
 ```
 
-可改字段：`bridgeBaseUrl`、`bridgeRoot`、`consoleToken`、`visionEnabled`、`visionBaseUrl`、
-`visionModel`、`visionApiKey`、`visionApiKeyEnv`、`prompt`、`timeoutMs`、`maxImageBytes`、
-`priceIn`/`priceOut`（按当前模型配单价）、`prices`（整表覆盖）。
+可改字段：`bridgeBaseUrl`、`bridgeRoot`、`consoleToken`、`visionProvider`、`visionEnabled`、
+`visionBaseUrl`、`visionModel`、`visionApiKey`、`visionApiKeyEnv`、`visionVault`、`visionRegion`、
+`prompt`、`timeoutMs`、`maxImageBytes`、`priceIn`/`priceOut`（按当前模型配单价）、`prices`（整表覆盖）。
 
 全部写进插件目录的 `runtime.json`，**改完立即生效，不用重启 DSH**。
 
+## 两种视觉后端
+
+| | **WorkBuddy**（默认） | **百炼 DashScope** |
+| --- | --- | --- |
+| 上游地址 | `https://copilot.tencent.com`（CN）/ `https://www.workbuddy.ai`（国际） | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| 推荐模型 | `deepseek-v4.1-flash` | `qwen3.5-omni-flash` |
+| 凭据来源 | `~/.dsh/workbuddy-vault/<区>/<uid>.json` 里的 `accessToken` | `visionApiKey` / 环境变量 / `~/.dsh/.credentials.yaml#refs` |
+| 协议 | **强制 SSE 流式**（网关硬要求），解析 `delta.content` | 非流式，一次返回 `choices[0].message.content` |
+| 计费 | credit（促销期常为 0），上游在 `usage.credit` 里报 | 人民币，按 token × 单价表 |
+| token 过期 | 401/403 时自动调 `/v2/plugin/auth/token/refresh` 刷新并**回写 vault** | 无（key 长期有效） |
+| 切后端 | `qq_vision_config action=set visionProvider=workbuddy` | `action=set visionProvider=bailian` |
+
+WorkBuddy 那条路要带的头比 OpenAI 多：`X-User-Id`、`X-No-Enterprise-Id: 1`、`X-Domain`、
+`X-Product: SaaS`，外加每请求现生成的会话三连 `X-Conversation-ID` /
+`X-Conversation-Request-ID` / `X-Conversation-Message-ID`。少一个就 4xx。
+
+> **refreshToken 会轮换**：刷新一次旧的 refreshToken 立即作废，所以刷新成功后必须原子回写
+> vault（tmp + rename），否则下次刷新会 401。这一步 `refreshWorkBuddyToken` 已经做了。
+
 ## 计费透明化
 
-`visionEnabled` 默认 `false`：只走免费本地 OCR，零花费。设 `true` 才会调付费模型。
+`visionEnabled` 出厂默认 `false`（只走免费本地 OCR）；本机 runtime.json 现为 `true`。
 
 每次真正调用付费模型都做三件事：
 
-1. 结果文本末尾追加一行 `【本次计费】调用付费视觉模型 N 次，合计 X tokens，约 ¥Y（模型 Z）`
-2. 返回结构里带 `billing: { paid, model, promptTokens, completionTokens, totalTokens, cost, currency }`
-3. 往 `usage.jsonl` 追加一条流水，用 `qq_vision_usage` 随时翻
+1. 结果文本末尾追加一行 `【本次计费】调用付费视觉模型 N 次，合计 X tokens，…（模型 Z）`
+   —— WorkBuddy 报 credit，百炼报人民币
+2. 返回结构里带 `billing: { paid, model, provider, providerLabel, baseUrl, promptTokens, completionTokens, totalTokens, cost, credit, currency }`
+3. 往 `usage.jsonl` 追加一条流水（含 `provider` / `baseUrl` / `credit`），用 `qq_vision_usage` 随时翻
 
-单价没有硬编码 —— 百炼价格随时调，编个数字比不写更糟。不配单价时账本照实记 token，
-金额栏留空并明说「单价未配置」。配了才折成钱。
+单价没有硬编码 —— 价格随时调，编个数字比不写更糟。不配单价时账本照实记 token，
+金额栏留空并明说「单价未配置」。配了才折成钱。WorkBuddy 只要上游报了 credit 就直接报 credit，
+不落回「单价未配置」。
 
-**2026-10-31 实测（同一张 320×160 测试图）**
+**实测（同一张 400×140 测试图，2026-11-04）**
 
-| 模型 | prompt | completion | total | 耗时 | 评价 |
-| --- | --- | --- | --- | --- | --- |
-| `qwen3.5-omni-flash` | 152 | 57 | 209 | 1172ms | 默认，描述完整 |
-| `qwen3-vl-plus` | 168 | 119 | 287 | 3575ms | 描述最细，最慢最贵 |
-| `qwen-vl-ocr` | 146 | 18 | 164 | 376ms | 只出文字，最快 |
+| 后端 | 模型 | prompt | completion | total | 耗时 | credit | 评价 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| WorkBuddy | `deepseek-v4.1-flash` | 211 | 34 | 245 | 2923ms | 0 | 默认，中英混排都准 |
+| 百炼 | `qwen3.5-omni-flash` | 152 | 57 | 209 | 1172ms | — | 快，但中文小字偶尔漏 |
+| 百炼 | `qwen3-vl-plus` | 168 | 119 | 287 | 3575ms | — | 描述最细，最慢最贵 |
+| 百炼 | `qwen-vl-ocr` | 146 | 18 | 164 | 376ms | — | 只出文字，最快 |
 
 > `qwen3.7-plus` 曾测过（94 / 91 / 185 tok / 2073ms），但不在百炼大学生优惠券覆盖范围、按字真扣钱，
 > 且输出比 omni-flash 啰嗦 7 成，已按用户要求从模型菜单移除。`MODEL_CATALOG` 里不再列出，
@@ -179,10 +207,13 @@ runtime.json  >  cordis.patch.yml 的 config  >  环境变量  >  自动探测
 | `bridgeBaseUrl` | `QQ_BRIDGE_BASE_URL` | `http://127.0.0.1:3200` |
 | `bridgeRoot` | `QQ_BRIDGE_ROOT` | 按 `ROOT_CANDIDATES` 探测 |
 | `consoleToken` | `QQ_BRIDGE_CONSOLE_TOKEN` | `<bridgeRoot>/state/console-token` |
+| `visionProvider` | — | `workbuddy` |
 | `visionEnabled` | — | `false`（只用免费 OCR） |
-| `visionBaseUrl` | — | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| `visionModel` | — | `qwen3.5-omni-flash` |
-| `visionApiKey` | 由 `visionApiKeyEnv` 指定，默认 `BAILIAN_API_KEY` | 从 `~/.dsh/.credentials.yaml` 的 `refs:` 段读 |
+| `visionModel` | — | 按后端：`deepseek-v4.1-flash` / `qwen3.5-omni-flash` |
+| `visionVault` | — | `~/.dsh/workbuddy-vault`（下有 `cn/` 与 `global/`） |
+| `visionRegion` | — | 空 = 自动挑 `refreshedAtMs` 最新的那个区 |
+| `visionBaseUrl` | — | 仅 bailian 用，`https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `visionApiKey` | 由 `visionApiKeyEnv` 指定，默认 `BAILIAN_API_KEY` | 从 `~/.dsh/.credentials.yaml` 的 `refs:` 段读（仅 bailian） |
 | `prices` | — | `{}`（空 = 只记 token 不计金额） |
 | `timeoutMs` | — | 90000 |
 | `maxImageBytes` | — | 8388608（8 MB） |
@@ -267,14 +298,17 @@ node test\web-route.mjs        # 46 项：Web 路由注册、Host 判定、白�
 node test\deep.mjs             # 真连桥接、真识图、真走 MCP（22 项 + 1 跳过）
 node test\verify-billing.mjs   # 断言不花钱的两条路径都不产生付费调用
 node test\verify-model-pick.mjs # 三模型对照，打印 token/耗时（会花钱）
-node test\verify-custom.mjs    # 21 项：models / config get-set-备份 / usage 记账清空
+node test\verify-custom.mjs    # 22 项：models / config get-set-备份 / usage 记账清空
 node test\verify-lossless.mjs  # 24 项：工具返回值必须能无损 JSON 往返
 node test\verify-mcp-tools.mjs # MCP 七个工具都注册上了
 node test\verify-mcp-calls.mjs # MCP 真调 models/usage/config 三个新工具
+node test\web-route.mjs        # 46 项：Web 路由 + 工具白名单 + output schema
+node test\verify-billing.mjs   # 临时关掉视觉，验「关掉后只走免费 OCR」并还原
 ```
 
 `deep.mjs` 需要桥接在线（默认 `127.0.0.1:3200`）。桥接会自动重启，偶发连不上时重跑即可。
 `verify-model-pick.mjs` 与 `deep.mjs` 的部分用例会真调付费模型并记账，跑之前确认 `visionEnabled` 的状态符合预期。
+`verify-billing.mjs` 会自己把 `visionEnabled` 临时改 false 再还原，不需要手动准备环境。
 
 `verify-lossless.mjs` 值得单独说一句：DSH 对插件工具的返回值做 JSON 往返校验，
 返回值里只要出现 `undefined`（对象属性或数组元素都算），整次调用就报
@@ -285,9 +319,16 @@ node test\verify-mcp-calls.mjs # MCP 真调 models/usage/config 三个新工具
 ## 已知边界
 
 - **只认 Windows OCR**：`ocrWithWindows` 在非 win32 平台直接抛错，视觉后端那条路不受影响。
-- **视觉后端只实现 OpenAI 兼容的 `/chat/completions`**：换别的协议要改 `describeWithVision`。
-- **模型菜单是硬编码的三个**：`MODEL_CATALOG` 里只有本机实测过的三个。传别的模型名照样能发出去（不当白名单用），但 `qq_vision_models` 不会列出来。
+- **视觉后端只实现两种**：WorkBuddy（SSE 流式）与百炼（非流式）。换别的协议要改
+  `describeWithWorkBuddy` / `describeWithBailian`，并在 `resolveRuntime` 里加 provider 推断。
+- **WorkBuddy 凭据靠 dsh-connect-workbuddy 插件维护**：本插件只读 vault、必要时刷新并回写。
+  那个插件没登录过（vault 目录空），WorkBuddy 后端就不可用，会明确报出来而不是静默退 OCR。
+- **WorkBuddy 网关强制流式**：`stream:false` 会被拒。解析按 SSE `data:` 行做，
+  `delta.content` 为空时用 `delta.reasoning_content` 兜底。
+- **模型菜单是硬编码的五条**：`MODEL_CATALOG` 里 5 个（2 个 WorkBuddy + 3 个百炼），每条带
+  `provider`。传别的模型名照样能发出去（不当白名单用），但 `qq_vision_models` 不会列出来。
 - **单价要自己填**：百炼价格随时调，插件不猜。不填只记 token，不折算金额。
+  WorkBuddy 按 credit 计，上游报了就直接报 credit，不需要单价表。
 - **一次最多看 5 张**（`limit` 上限），再多就分批。
 - **面板只在本机 Web GUI 里出现**：`client.js` 是 web 平台半边，`immediately: true` 一启动就加载，
   但改它本身必须重启 DSH；改 `runtime.json`（面板里点就是改它）不用重启。

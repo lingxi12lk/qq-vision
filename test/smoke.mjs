@@ -164,14 +164,22 @@ check('resolveRuntime 超时是正数', () => {
 check('resolveRuntime 的 prompt 非空', () => {
   assert.ok(rt.prompt.length > 10);
 });
-check('视觉 key 从 .credentials.yaml 读到了', () => {
+check('视觉凭据读到了（百炼 key 或 WorkBuddy vault token）', () => {
   // 这台机器环境变量里没有 *_KEY，只能从 DSH 凭据文件读。
   if (!rt.visionApiKey) {
-    console.log('    （跳过：这台机器没有可用 key，不算失败）');
+    console.log('    （跳过：这台机器没有可用凭据，不算失败）');
     return;
   }
-  assert.ok(rt.visionApiKey.length > 20, `key 太短：${rt.visionApiKey.length}`);
-  assert.ok(rt.visionApiKeyVia.includes('credentials') || rt.visionApiKeyVia.startsWith('env:') || rt.visionApiKeyVia === 'config');
+  assert.ok(rt.visionApiKey.length > 20, `凭据太短：${rt.visionApiKey.length}`);
+  // 2026-11-04 起支持两种后端：百炼走 .credentials.yaml / env / runtime.json，
+  // WorkBuddy 走 vault 里的 accessToken（via 形如 vault:<path>）。
+  assert.ok(
+    rt.visionApiKeyVia.includes('credentials')
+      || rt.visionApiKeyVia.startsWith('env:')
+      || rt.visionApiKeyVia.startsWith('vault:')
+      || rt.visionApiKeyVia === 'config',
+    `凭据来源不认识：${rt.visionApiKeyVia}`
+  );
 });
 
 // ── 工具定义 ──────────────────────────────────────────────
