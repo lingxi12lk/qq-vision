@@ -4,7 +4,7 @@
 //   3) toolModels 在真 ctx（假 llm）下真的走扫描、带 source / backend / current / usable
 //   4) toolModels 在没有 llm 的 ctx 下自动降级到兜底表，不抛错
 // 用法：node test/verify-scan.mjs
-import { scanDshModels, builtinRows, mergeRows, backendOfRoute, readPiAiProfiles } from '../lib/model-scan.js';
+import { scanDshModels, builtinRows, mergeRows, backendOfRoute, readPiAiProfiles, upstreamOfWrapper, addressKnownOf, resolveRouteMeta } from '../lib/model-scan.js';
 import { __internals } from '../lib/index.js';
 import { resolveRuntime } from '../lib/vision.js';
 
@@ -240,6 +240,84 @@ const fakeLlm = {
   check('describe 抛错时返回空 Map', readPiAiProfiles(badSettings).size === 0);
   check('没有 settings 时返回空 Map', readPiAiProfiles(undefined).size === 0);
   check('settings 没有 describe 时返回空 Map', readPiAiProfiles({}).size === 0);
+}
+
+// ── 9. 包装路由继承上游地址 + 地址未知必须标记出来 ──
+// 背景：vision.js 在没拿到 visionBaseUrl 时兜底 DEFAULT_VISION_BASE_URL（dashscope）。
+// 所以「地址为空」不等于「走默认」，而是「拿别家的模型名去请求阿里百炼」——
+// 不报错，静默错发。必须显式判定并在面板禁用。
+{
+  // upstreamOfWrapper：modlens-* 切前缀，历史遗留 deepseek-modlens 特殊映射
+  check('modlens-bailian 的上游是 bailian', upstreamOfWrapper('modlens-bailian') === 'bailian');
+  check('modlens-workbuddy-global 的上游是 workbuddy-global',
+    upstreamOfWrapper('modlens-workbuddy-global') === 'workbuddy-global');
+  check('deepseek-modlens 的上游是 deepseek-official',
+    upstreamOfWrapper('deepseek-modlens') === 'deepseek-official');
+  check('普通路由没有上游', upstreamOfWrapper('bailian') === '' && upstreamOfWrapper('') === '');
+
+  // addressKnownOf：workbuddy 系不需要 baseUrl（本地 shim + vault），其余必须非空
+  check('workbuddy 无地址也算已知', addressKnownOf('workbuddy', '') === true);
+  check('bailian 无地址算未知', addressKnownOf('bailian', '') === false);
+  check('bailian 有地址算已知', addressKnownOf('bailian', 'https://x/v1') === true);
+  check('空白串不算地址', addressKnownOf('bailian', '   ') === false);
+
+  // resolveRouteMeta：包装路由沿上游继承，自身有地址则不覆盖
+  const meta = new Map([
+    ['bailian', { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKeyEnv: 'BAILIAN_API_KEY' }],
+    ['modlens-bailian', { baseUrl: '', apiKeyEnv: '' }],
+    ['deepseek-official', { baseUrl: '', apiKeyEnv: '' }]
+  ]);
+  const inherited = resolveRouteMeta('modlens-bailian', meta);
+  check('modlens-bailian 继承到上游 baseUrl',
+    inherited?.baseUrl === 'https://dashscope.aliyuncs.com/compatible-mode/v1', inherited?.baseUrl);
+  check('modlens-bailian 继承到上游 apiKeyEnv', inherited?.apiKeyEnv === 'BAILIAN_API_KEY', inherited?.apiKeyEnv);
+  const none = resolveRouteMeta('deepseek-official', meta);
+  check('上游也没地址时保持空', (none?.baseUrl || '') === '');
+  check('完全没登记的路由返回 null', resolveRouteMeta('不存在', meta) === null);
+}
+
+// ── 10. 扫描结果里包装路由真的带上了上游地址，未知地址的标 addressKnown=false ──
+{
+  const llmWithWrapper = {
+    listProviders: () => [
+      { id: 'bailian', name: '百炼' },
+      { id: 'modlens-bailian', name: 'ModLens 包装' },
+      { id: 'deepseek-official', name: 'DeepSeek 官方' }
+    ],
+    listConfigurableProviders: () => [
+      { provider: 'bailian', defaultBaseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', baseURLEnv: ['BAILIAN_API_KEY'] }
+    ],
+    async listModels(route) {
+      return [{ provider: route, id: 'qwen-vl-max', name: 'Qwen VL Max', inputModalities: ['text', 'image'] }];
+    }
+  };
+  const out = await scanDshModels(llmWithWrapper, {});
+  const wrapRow = out.providers.find((p) => p.route === 'modlens-bailian');
+  check('包装路由的 provider 行带上游地址',
+    wrapRow?.baseUrl === 'https://dashscope.aliyuncs.com/compatible-mode/v1', wrapRow?.baseUrl);
+  check('包装路由标出 upstream', wrapRow?.upstream === 'bailian', wrapRow?.upstream);
+  check('包装路由 addressKnown=true', wrapRow?.addressKnown === true);
+
+  const offRow = out.providers.find((p) => p.route === 'deepseek-official');
+  check('无地址路由 addressKnown=false', offRow?.addressKnown === false);
+  check('无地址路由 baseUrl 为空', (offRow?.baseUrl || '') === '');
+
+  const wrapModel = out.models.find((m) => m.provider === 'modlens-bailian');
+  check('包装路由的模型行继承到 baseUrl',
+    wrapModel?.baseUrl === 'https://dashscope.aliyuncs.com/compatible-mode/v1', wrapModel?.baseUrl);
+  check('包装路由的模型行 addressKnown=true', wrapModel?.addressKnown === true);
+  const offModel = out.models.find((m) => m.provider === 'deepseek-official');
+  check('无地址路由的模型行 addressKnown=false', offModel?.addressKnown === false);
+
+  // listModels 抛错的行也要带齐字段，别让面板读 undefined
+  const brokenOut = await scanDshModels({
+    listProviders: () => [{ id: 'broken', name: '坏的' }],
+    listConfigurableProviders: () => [],
+    async listModels() { throw new Error('boom'); }
+  }, {});
+  const brokenRow = brokenOut.providers.find((p) => p.route === 'broken');
+  check('抛错行也有 addressKnown 字段', brokenRow?.addressKnown === false);
+  check('抛错行也有 upstream 字段', brokenRow?.upstream === '');
 }
 
 const passed = results.filter((r) => r.ok).length;

@@ -320,17 +320,29 @@ window.__ModuleLoader__.load({
                   const patch = { visionProvider: backend, visionModel: id };
                   if (hit?.baseUrl) patch.visionBaseUrl = hit.baseUrl;
                   if (hit?.apiKeyEnv) patch.visionApiKeyEnv = hit.apiKeyEnv;
+                  // 地址未知的模型在下拉里是 disabled，正常点不到；这里再挡一层，
+                  // 防止浏览器没按 disabled 走（或被脚本改了 value）。
+                  if (hit?.addressKnown === false) {
+                    setError(`「${id}」所在路由 ${route} 在 DSH 里没有地址，选中后会兜底到 dashscope 错发，已拦下。`);
+                    return;
+                  }
                   saveConfig(patch, `默认模型（${id}）`);
                 }
               },
                 models.length === 0
                   ? h('option', { value: currentKey }, currentModel || '（读不到模型表，点右边刷新）')
                   : groups.map((g) => h('optgroup', { key: g.backend, label: groupLabel(g.backend, g.rows) },
-                    g.rows.map((m) => h('option', { key: modelKey(m), value: modelKey(m) },
+                    g.rows.map((m) => h('option', {
+                      key: modelKey(m), value: modelKey(m),
+                      // 地址未知的模型选中后会兜底到 dashscope，等于拿别家的模型名请求阿里百炼，
+                      // 不报错但结果一定错。直接禁掉，别让用户点。
+                      disabled: m.addressKnown === false
+                    },
                       `${m.id}${m.current ? '（当前）' : ''}`
                       + `${m.provider && m.provider !== m.backend ? ` [${m.provider}]` : ''}`
                       + `${m.image === true ? ' · 图' : m.image === false ? ' · 纯文本' : ' · 图能力未声明'}`
-                      + `${m.label && m.label !== m.id ? ' · ' + m.label : ''}`))))
+                      + `${m.label && m.label !== m.id ? ' · ' + m.label : ''}`
+                      + `${m.addressKnown === false ? ' · 地址未知，不可用' : ''}`))))
               )
             ),
             h(Field, { label: '扫描来源', hint: 'llm 服务里 provider 的模型目录' },
@@ -359,6 +371,9 @@ window.__ModuleLoader__.load({
               // 面板不再自己按 id 判，避免出现两个「当前」。
               const on = m.current === true;
               const usable = backend === provider;
+              // 地址未知：选中后会兜底到 dashscope（见 vision.js 的 DEFAULT_VISION_BASE_URL），
+              // 拿别家的模型名去请求阿里百炼，不报错但必然错。禁用按钮并说明原因。
+              const addrUnknown = m.addressKnown === false;
               const p = priceOf(m.id);
               const meas = m.measured || {};
               return h('div', { key: modelKey(m), className: 'qqz-model' + (on ? ' on' : '') },
@@ -368,7 +383,8 @@ window.__ModuleLoader__.load({
                     m.image === true ? h(Badge, { tone: 'ok' }, '图') : null,
                     m.image === false ? h(Badge, null, '纯文本') : null,
                     m.image === null ? h(Badge, null, '图未声明') : null,
-                    m.source === 'dsh' ? null : h(Badge, null, '兜底')),
+                    m.source === 'dsh' ? null : h(Badge, null, '兜底'),
+                    addrUnknown ? h(Badge, { tone: 'error' }, '地址未知') : null),
                   h('span', { className: 'qqz-model-meta' },
                     [
                       m.provider && m.provider !== backend ? `路由 ${m.provider}` : null,
@@ -384,20 +400,25 @@ window.__ModuleLoader__.load({
                       meas.credit ? `${meas.credit} credit` : null
                     ].filter(Boolean).join(' · ') || '本机未实测'
                   ),
-                  m.note ? h('span', { className: 'qqz-model-note' }, m.note) : null
+                  m.note ? h('span', { className: 'qqz-model-note' }, m.note) : null,
+                  addrUnknown
+                    ? h('span', { className: 'qqz-model-note' },
+                      `这条路由（${m.provider}）在 DSH 里没有地址，选中后会兜底到 dashscope 并把模型名原样发过去 —— `
+                      + '结果一定是错的，所以禁用了。想用就自己在 DSH 侧给它配 baseURL，或换一条有地址的路由。')
+                    : null
                 ),
                 h('div', { className: 'qqz-model-act' },
                   h('span', { className: 'qqz-model-price' },
                     backend === 'workbuddy' ? '按 credit 计' : (p ? `¥${p.in ?? '?'}/M in · ¥${p.out ?? '?'}/M out` : '单价未配')),
                   on ? null : h('button', {
-                    type: 'button', disabled: busyAny,
+                    type: 'button', disabled: busyAny || addrUnknown,
                     onClick: () => {
                       const patch = usable ? { visionModel: m.id } : { visionProvider: backend, visionModel: m.id };
                       if (!usable && m.baseUrl) patch.visionBaseUrl = m.baseUrl;
                       if (!usable && m.apiKeyEnv) patch.visionApiKeyEnv = m.apiKeyEnv;
                       saveConfig(patch, `默认模型（${m.id}）`);
                     }
-                  }, usable ? '设为默认' : '切到该后端')
+                  }, addrUnknown ? '地址未知' : (usable ? '设为默认' : '切到该后端'))
                 )
               );
             })
