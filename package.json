@@ -1,6 +1,6 @@
 {
   "name": "dsh-qq-vision",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "DeepSeek Harness 插件：让纯文本模型也能看图片——取图 → 视觉模型（WorkBuddy / 百炼）或本地 OCR → 文字结果回灌上下文，并在设置页提供可视化面板。",
   "type": "module",
   "main": "./lib/index.js",
@@ -40,7 +40,7 @@
     "node": ">=22.19"
   },
   "scripts": {
-    "test": "node test/smoke.mjs && node test/verify-lossless.mjs && node test/verify-custom.mjs && node test/verify-mcp-tools.mjs && node test/web-route.mjs && node test/verify-billing.mjs",
+    "test": "node test/smoke.mjs && node test/verify-lossless.mjs && node test/verify-custom.mjs && node test/verify-mcp-tools.mjs && node test/web-route.mjs && node test/verify-billing.mjs && node test/verify-scan.mjs",
     "test:paid": "node test/verify-model-pick.mjs",
     "test:live": "node test/deep.mjs"
   },

@@ -92,6 +92,7 @@ window.__ModuleLoader__.load({
       const [status, setStatus] = useState(null);
       const [config, setConfig] = useState(null);
       const [models, setModels] = useState([]);
+      const [modelMeta, setModelMeta] = useState({ available: false, providers: [], errors: [], scannedAt: '' });
       const [usage, setUsage] = useState(null);
       const [busy, setBusy] = useState('');
       const [error, setError] = useState('');
@@ -121,10 +122,16 @@ window.__ModuleLoader__.load({
         } catch (e) { fail(e); }
       }, []);
 
-      const loadModels = useCallback(async () => {
+      const loadModels = useCallback(async (refresh) => {
         try {
-          const m = await apiGet('models');
+          const m = await apiGet('models', refresh ? { refresh: 1 } : undefined);
           setModels(Array.isArray(m.data?.models) ? m.data.models : []);
+          setModelMeta({
+            available: m.data?.scanAvailable === true,
+            providers: Array.isArray(m.data?.providers) ? m.data.providers : [],
+            errors: Array.isArray(m.data?.errors) ? m.data.errors : [],
+            scannedAt: m.data?.scannedAt || ''
+          });
         } catch (e) { fail(e); }
       }, []);
 
@@ -204,7 +211,32 @@ window.__ModuleLoader__.load({
       const isWb = provider === 'workbuddy';
       const providerLabel = isWb ? 'WorkBuddy' : '百炼';
       const wb = vision.workbuddy || cfg.workbuddy || null;
-      const wbUsable = models.filter((m) => (m.provider || 'bailian') === provider);
+
+      // 模型行按后端归组。value 用 `route::model` 复合键 —— 必须带 route 而不是 backend：
+      // workbuddy 与 workbuddy-global 是两条路由、同一个模型名，只按 backend 拼键会出现
+      // 两个 option 同 value，select 会同时高亮。route::id 在 DSH 里天然唯一。
+      const modelKey = (m) => `${m.provider || m.backend || 'bailian'}::${m.id}`;
+      const currentRow = models.find((m) => m.current === true) || models.find((m) => m.id === currentModel);
+      const currentKey = currentRow ? modelKey(currentRow) : `${provider}::${currentModel}`;
+      const groups = [];
+      for (const m of models) {
+        const backend = m.backend || m.provider || 'bailian';
+        let g = groups.find((x) => x.backend === backend);
+        if (!g) { g = { backend, rows: [] }; groups.push(g); }
+        g.rows.push(m);
+      }
+      // 当前后端排第一，其余按名字。
+      groups.sort((a, b) => (a.backend === provider ? -1 : b.backend === provider ? 1 : a.backend.localeCompare(b.backend)));
+      const groupLabel = (backend, rows) => {
+        const name = backend === 'workbuddy' ? 'WorkBuddy（腾讯网关）'
+          : backend === 'bailian' ? '百炼 / OpenAI 兼容网关'
+            : backend;
+        const img = rows.filter((r) => r.image === true).length;
+        const routes = [...new Set(rows.map((r) => r.provider).filter(Boolean))];
+        return `${name} · ${rows.length} 个${img ? `（${img} 个声明支持图）` : ''}`
+          + (routes.length > 1 ? ` · 路由 ${routes.join('/')}` : '');
+      };
+      const wbUsable = models.filter((m) => (m.backend || m.provider) === provider);
 
       return h('div', { className: 'qqz-panel' },
 
@@ -269,31 +301,77 @@ window.__ModuleLoader__.load({
                 h('option', { value: 'bailian' }, '百炼 DashScope（qwen 系列）')
               )
             ),
-            h(Field, { label: '默认模型', hint: '改完立刻生效，不用重启' },
+            h(Field, { label: '默认模型', hint: '列表来自当前 DSH 已注册的全部 provider；改完立刻生效，不用重启' },
               h('select', {
-                value: currentModel,
+                value: currentKey,
                 disabled: busyAny,
-                onChange: (e) => saveConfig({ visionModel: e.target.value }, '默认模型')
+                onChange: (e) => {
+                  const raw = String(e.target.value || '');
+                  const idx = raw.indexOf('::');
+                  if (idx < 0) return;
+                  const route = raw.slice(0, idx);
+                  const id = raw.slice(idx + 2);
+                  const hit = models.find((m) => (m.provider || m.backend) === route && m.id === id)
+                    || models.find((m) => m.id === id);
+                  // 后端种类跟着模型行走（同一个模型名在 workbuddy 与 workbuddy-global 下
+                  // 都可能出现，只有 route 才能区分）。第三方网关还带着 baseUrl / apiKeyEnv，
+                  // 一并写进去，免得用户切了模型还要自己填地址（填错就是 404）。
+                  const backend = hit?.backend || route || provider;
+                  const patch = { visionProvider: backend, visionModel: id };
+                  if (hit?.baseUrl) patch.visionBaseUrl = hit.baseUrl;
+                  if (hit?.apiKeyEnv) patch.visionApiKeyEnv = hit.apiKeyEnv;
+                  saveConfig(patch, `默认模型（${id}）`);
+                }
               },
-                wbUsable.length === 0
-                  ? h('option', { value: currentModel }, currentModel || '（读不到模型表）')
-                  : wbUsable.map((m) => h('option', { key: m.id, value: m.id },
-                    `${m.id}${m.id === currentModel ? '（当前）' : ''} · ${m.label || ''}`))
+                models.length === 0
+                  ? h('option', { value: currentKey }, currentModel || '（读不到模型表，点右边刷新）')
+                  : groups.map((g) => h('optgroup', { key: g.backend, label: groupLabel(g.backend, g.rows) },
+                    g.rows.map((m) => h('option', { key: modelKey(m), value: modelKey(m) },
+                      `${m.id}${m.current ? '（当前）' : ''}`
+                      + `${m.provider && m.provider !== m.backend ? ` [${m.provider}]` : ''}`
+                      + `${m.image === true ? ' · 图' : m.image === false ? ' · 纯文本' : ' · 图能力未声明'}`
+                      + `${m.label && m.label !== m.id ? ' · ' + m.label : ''}`))))
+              )
+            ),
+            h(Field, { label: '扫描来源', hint: 'llm 服务里 provider 的模型目录' },
+              h(Row, null,
+                h(Badge, { tone: modelMeta.available ? 'ok' : undefined },
+                  modelMeta.available ? `DSH ${models.length} 个` : '兜底表'),
+                h('button', {
+                  type: 'button', disabled: busyAny,
+                  onClick: () => loadModels(true)
+                }, busyAny ? '…' : '重新扫描')
               )
             )
           ),
+          modelMeta.errors.length
+            ? h('div', { className: 'qqz-warn' },
+              `有 ${modelMeta.errors.length} 个 provider 没扫到：${modelMeta.errors.join('；')}`)
+            : null,
+          modelMeta.providers.length
+            ? h('div', { className: 'qqz-model-meta' },
+              modelMeta.providers.map((p) => `${p.route}（${p.backend}）${p.count} 个${p.error ? ' · 失败' : ''}`).join('  |  '))
+            : null,
           models.length === 0 ? null : h('div', { className: 'qqz-models' },
             models.map((m) => {
-              const on = m.id === currentModel;
-              const usable = (m.provider || 'bailian') === provider;
+              const backend = m.backend || m.provider || 'bailian';
+              // current 由 host 侧算好且保证唯一（同名模型可能在两条路由下都注册），
+              // 面板不再自己按 id 判，避免出现两个「当前」。
+              const on = m.current === true;
+              const usable = backend === provider;
               const p = priceOf(m.id);
               const meas = m.measured || {};
-              return h('div', { key: m.id, className: 'qqz-model' + (on ? ' on' : '') },
+              return h('div', { key: modelKey(m), className: 'qqz-model' + (on ? ' on' : '') },
                 h('div', { className: 'qqz-model-main' },
                   h('span', { className: 'qqz-model-id' }, m.id, on ? h(Badge, { tone: 'ok' }, '当前') : null,
-                    usable ? null : h(Badge, null, m.provider === 'workbuddy' ? 'WorkBuddy' : '百炼')),
+                    usable ? null : h(Badge, null, backend === 'workbuddy' ? 'WorkBuddy' : backend),
+                    m.image === true ? h(Badge, { tone: 'ok' }, '图') : null,
+                    m.image === false ? h(Badge, null, '纯文本') : null,
+                    m.image === null ? h(Badge, null, '图未声明') : null,
+                    m.source === 'dsh' ? null : h(Badge, null, '兜底')),
                   h('span', { className: 'qqz-model-meta' },
                     [
+                      m.provider && m.provider !== backend ? `路由 ${m.provider}` : null,
                       m.label || null,
                       m.strength || null
                     ].filter(Boolean).join(' · ') || '—'
@@ -310,13 +388,15 @@ window.__ModuleLoader__.load({
                 ),
                 h('div', { className: 'qqz-model-act' },
                   h('span', { className: 'qqz-model-price' },
-                    m.provider === 'workbuddy' ? '按 credit 计' : (p ? `¥${p.in ?? '?'}/M in · ¥${p.out ?? '?'}/M out` : '单价未配')),
+                    backend === 'workbuddy' ? '按 credit 计' : (p ? `¥${p.in ?? '?'}/M in · ¥${p.out ?? '?'}/M out` : '单价未配')),
                   on ? null : h('button', {
                     type: 'button', disabled: busyAny,
-                    onClick: () => saveConfig(usable
-                      ? { visionModel: m.id }
-                      : { visionProvider: m.provider || 'bailian', visionModel: m.id },
-                    `默认模型（${m.id}）`)
+                    onClick: () => {
+                      const patch = usable ? { visionModel: m.id } : { visionProvider: backend, visionModel: m.id };
+                      if (!usable && m.baseUrl) patch.visionBaseUrl = m.baseUrl;
+                      if (!usable && m.apiKeyEnv) patch.visionApiKeyEnv = m.apiKeyEnv;
+                      saveConfig(patch, `默认模型（${m.id}）`);
+                    }
                   }, usable ? '设为默认' : '切到该后端')
                 )
               );

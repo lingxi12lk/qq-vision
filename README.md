@@ -71,7 +71,7 @@ client.js          DSH 插件 client 半边 —— 设置页「QQ 识图」面�
 | `qq_describe_image` | `key`、`messageId`、`token`、`prompt`、`limit`(1–5)、`preferOcr`、`model` | 看一条 QQ 消息里的图片/表情 |
 | `qq_describe_file` | `path`、`prompt`、`preferOcr`、`model` | 看本地图片文件 |
 | `qq_vision_status` | — | 自检：桥接、令牌、视觉后端、key 来源、视觉开关、OCR 脚本 BOM |
-| `qq_vision_models` | — | 模型菜单 + 本机实测 token/耗时 + 当前单价 |
+| `qq_vision_models` | `refresh`(true=跳过 60s 缓存重扫) | 扫描 DSH 已注册的 provider/模型 + 本机实测 token/耗时 + 当前单价 |
 | `qq_vision_usage` | `limit`(1–200) | 账单流水：每次付费调用一条 |
 | `qq_vision_config` | `action` + 十几个字段 | 读/改配置，改前自动备份 |
 | `qq_vision_selftest` | `paid` | 五层自检（桥接/凭据/OCR/视觉/账本），默认不花钱 |
@@ -112,7 +112,7 @@ qq_vision_selftest({ paid: true })  // 真调一次视觉模型（会记账）�
 | 卡 | 能做什么 |
 | --- | --- |
 | 识图链路 | 一眼看桥接在不在、OCR 脚本在不在、视觉开关状态 |
-| 视觉模型 | 三个模型带本机实测 token/耗时，点一下切换，当前用的高亮 |
+| 视觉模型 | **扫描 DSH 已注册的全部 provider/模型**（下拉按后端分组），带本机实测 token/耗时，点一下切换，当前用的高亮 |
 | 后端与凭据 | 改后端地址、key 来源、超时、单图上限；key 默认打码，点「显示」才明文 |
 | 识图测试 | 贴本地图片路径直接跑一次（`preferOcr` 勾上 = 零花费） |
 | 五层自检 | 一次跑完五层，逐层给绿/红与耗时；付费层要单独勾「允许花钱」 |
@@ -168,6 +168,14 @@ WorkBuddy 那条路要带的头比 OpenAI 多：`X-User-Id`、`X-No-Enterprise-I
 > **refreshToken 会轮换**：刷新一次旧的 refreshToken 立即作废，所以刷新成功后必须原子回写
 > vault（tmp + rename），否则下次刷新会 401。这一步 `refreshWorkBuddyToken` 已经做了。
 
+### 第三种后端：任意 OpenAI 兼容网关
+
+协议只有两种（WorkBuddy 的 SSE、OpenAI 的 `/chat/completions`），所以 DSH 里那些 OpenAI 兼容的
+第三方 provider（比如 `baomiao-oneapi`）会自动归到 `bailian` 这一支发出去 —— 只要在模型下拉里选中它，
+插件会把该 provider 的 `defaultBaseURL` 和 `baseURLEnv` 一起写进 `visionBaseUrl` / `visionApiKeyEnv`，
+不用手填地址（填错就是 404）。归类规则见 `lib/model-scan.js` 的 `backendOfRoute`：
+路由名含 `workbuddy` / `codebuddy` → WorkBuddy 协议，其余 → OpenAI 兼容协议。
+
 ## 计费透明化
 
 `visionEnabled` 出厂默认 `false`（只走免费本地 OCR）；本机 runtime.json 现为 `true`。
@@ -193,8 +201,9 @@ WorkBuddy 那条路要带的头比 OpenAI 多：`X-User-Id`、`X-No-Enterprise-I
 | 百炼 | `qwen-vl-ocr` | 146 | 18 | 164 | 376ms | — | 只出文字，最快 |
 
 > `qwen3.7-plus` 曾测过（94 / 91 / 185 tok / 2073ms），但不在百炼大学生优惠券覆盖范围、按字真扣钱，
-> 且输出比 omni-flash 啰嗦 7 成，已按用户要求从模型菜单移除。`MODEL_CATALOG` 里不再列出，
-> 传它的名字仍能发出去（菜单不是白名单），但工具描述和 `qq_vision_models` 都不会推荐它。
+> 且输出比 omni-flash 啰嗦 7 成，已按用户要求从 `MODEL_CATALOG` 兜底表移除。
+> 但**菜单已经不再由这张表决定** —— 它现在只做兜底。只要 DSH 里注册了这个模型，下拉和
+> `qq_vision_models` 照样会把它列出来，选中也能发出去。
 
 ## 配置优先级
 
@@ -302,6 +311,7 @@ node test\verify-custom.mjs    # 22 项：models / config get-set-备份 / usage
 node test\verify-lossless.mjs  # 24 项：工具返回值必须能无损 JSON 往返
 node test\verify-mcp-tools.mjs # MCP 七个工具都注册上了
 node test\verify-mcp-calls.mjs # MCP 真调 models/usage/config 三个新工具
+node test\verify-scan.mjs      # 45 项：模型扫描（假 llm 服务 / 单 provider 报错 / 降级 / 合并兜底 / 缓存）
 node test\web-route.mjs        # 46 项：Web 路由 + 工具白名单 + output schema
 node test\verify-billing.mjs   # 临时关掉视觉，验「关掉后只走免费 OCR」并还原
 ```
@@ -325,8 +335,12 @@ node test\verify-billing.mjs   # 临时关掉视觉，验「关掉后只走免�
   那个插件没登录过（vault 目录空），WorkBuddy 后端就不可用，会明确报出来而不是静默退 OCR。
 - **WorkBuddy 网关强制流式**：`stream:false` 会被拒。解析按 SSE `data:` 行做，
   `delta.content` 为空时用 `delta.reasoning_content` 兜底。
-- **模型菜单是硬编码的五条**：`MODEL_CATALOG` 里 5 个（2 个 WorkBuddy + 3 个百炼），每条带
-  `provider`。传别的模型名照样能发出去（不当白名单用），但 `qq_vision_models` 不会列出来。
+- **模型菜单现在扫 DSH**：`qq_vision_models` 与面板下拉都会向宿主 `llm` 服务要
+  `listProviders()` + `listModels(route)`，把当前 DSH 里真正注册过的模型全列出来（`source: 'dsh'`）。
+  `llm` 服务不可用（老版本宿主）或某个 provider 报错时，回落到 `MODEL_CATALOG` 那 5 条兜底表
+  （`source: 'builtin-fallback'`），菜单不会空。传别的模型名照样能发出去（不当白名单用）。
+- **模型列表按图能力排序但不硬过滤**：`inputModalities` 声明含 `image` 的排最前、没声明（`image: null`）
+  的排中间、明确只有 `text` 的排最后。没声明不等于不能读图 —— 很多第三方 OpenAI 兼容网关不报这个字段。
 - **单价要自己填**：百炼价格随时调，插件不猜。不填只记 token，不折算金额。
   WorkBuddy 按 credit 计，上游报了就直接报 credit，不需要单价表。
 - **一次最多看 5 张**（`limit` 上限），再多就分批。
